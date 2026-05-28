@@ -8,8 +8,8 @@ import (
 
 	"github.com/urfave/cli/v2"
 
-	"github.com/hybridgroup/go-sayanything/pkg/say"
-	"github.com/hybridgroup/go-sayanything/pkg/tts"
+	"github.com/talkingheads2053/sayanything/pkg/say"
+	"github.com/talkingheads2053/sayanything/pkg/tts"
 )
 
 var (

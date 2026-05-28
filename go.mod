@@ -1,4 +1,4 @@
-module github.com/hybridgroup/go-sayanything
+module github.com/talkingheads2053/sayanything
 
 go 1.25.0
 
