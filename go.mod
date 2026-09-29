@@ -8,7 +8,7 @@ require (
 	github.com/ebitengine/oto/v3 v3.4.0
 	github.com/go-audio/audio v1.0.0
 	github.com/go-audio/wav v1.1.0
-	github.com/hybridgroup/voicevox v0.1.0
+	github.com/hybridgroup/voicevox v0.1.1
 	github.com/tosone/minimp3 v1.0.1
 	github.com/urfave/cli/v2 v2.25.1
 	golang.org/x/text v0.4.0

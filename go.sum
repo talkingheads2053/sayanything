@@ -64,8 +64,8 @@ github.com/googleapis/enterprise-certificate-proxy v0.2.0 h1:y8Yozv7SZtlU//QXbez
 github.com/googleapis/enterprise-certificate-proxy v0.2.0/go.mod h1:8C0jb7/mgJe/9KK8Lm7X9ctZC2t60YyIpYEI16jx0Qg=
 github.com/googleapis/gax-go/v2 v2.7.0 h1:IcsPKeInNvYi7eqSaDjiZqDDKu5rsmunY0Y1YupQSSQ=
 github.com/googleapis/gax-go/v2 v2.7.0/go.mod h1:TEop28CZZQ2y+c0VxMUmu1lV+fQx57QpBWsYpwqHJx8=
-github.com/hybridgroup/voicevox v0.1.0 h1:3EurRhJFq+p0k0vkxwa4VQYmMBxRTExaP/IsMl/jmdA=
-github.com/hybridgroup/voicevox v0.1.0/go.mod h1:qEUmmZL1bMzlUBwX0zfX950zAcyRy+vCCTNVGviIQZY=
+github.com/hybridgroup/voicevox v0.1.1 h1:VwkX4L3OI54i2Hz4AxDCGcEX1gPGaSVSgVxD6tEMOe0=
+github.com/hybridgroup/voicevox v0.1.1/go.mod h1:qEUmmZL1bMzlUBwX0zfX950zAcyRy+vCCTNVGviIQZY=
 github.com/jupiterrider/ffi v0.8.0 h1:IH6lto8OZaRIulQYObtZibII4tq71hXT6Z+KLBcxCcQ=
 github.com/jupiterrider/ffi v0.8.0/go.mod h1:9dauhpOfNqrqk28fxuu0kkdeFtT9Qr4vbfigiuIXN7c=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
