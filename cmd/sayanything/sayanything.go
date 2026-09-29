@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/urfave/cli/v2"
@@ -49,7 +50,7 @@ func RunCLI(version string) error {
 			},
 			&cli.StringFlag{
 				Name:    "engine",
-				Usage:   "TTS engine to use (google, piper, sam)",
+				Usage:   "TTS engine to use (google, piper, sam, voicevox)",
 				Aliases: []string{"e"},
 			},
 			&cli.StringFlag{
@@ -84,6 +85,22 @@ func RunCLI(version string) error {
 				Name:  "speed",
 				Usage: "SAM speed value (0-255)",
 				Value: -1,
+			},
+			&cli.Float64Flag{
+				Name:  "speed-scale",
+				Usage: "VOICEVOX speed scale (default 1.0)",
+			},
+			&cli.Float64Flag{
+				Name:  "pitch-scale",
+				Usage: "VOICEVOX pitch scale (default 0.0)",
+			},
+			&cli.Float64Flag{
+				Name:  "intonation-scale",
+				Usage: "VOICEVOX intonation scale (default 1.0)",
+			},
+			&cli.Float64Flag{
+				Name:  "volume-scale",
+				Usage: "VOICEVOX volume scale (default 1.0)",
 			},
 		},
 		Before: func(c *cli.Context) error {
@@ -136,6 +153,35 @@ func RunCLI(version string) error {
 					samSpeaker.SetSpeed(byte(v))
 				}
 				t = samSpeaker
+				format = "wav"
+			case "voicevox":
+				var style uint64
+				if voice != "" {
+					var err error
+					if style, err = strconv.ParseUint(voice, 10, 32); err != nil {
+						return cli.Exit(errors.New("voicevox voice must be a style id number"), 1)
+					}
+				}
+
+				vv := tts.NewVoicevox(uint32(style))
+				vv.UseGPU(c.Bool("gpu"))
+				if c.IsSet("speed-scale") {
+					vv.SetSpeedScale(c.Float64("speed-scale"))
+				}
+				if c.IsSet("pitch-scale") {
+					vv.SetPitchScale(c.Float64("pitch-scale"))
+				}
+				if c.IsSet("intonation-scale") {
+					vv.SetIntonationScale(c.Float64("intonation-scale"))
+				}
+				if c.IsSet("volume-scale") {
+					vv.SetVolumeScale(c.Float64("volume-scale"))
+				}
+				if err := vv.Connect(c.String("data")); err != nil {
+					vv.Close()
+					return cli.Exit(err, 1)
+				}
+				t = vv
 				format = "wav"
 			default:
 				return cli.Exit(errors.New("unsupported engine"), 1)
