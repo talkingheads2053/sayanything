@@ -2,7 +2,9 @@ package say
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/ebitengine/oto/v3"
@@ -11,11 +13,13 @@ import (
 	"github.com/tosone/minimp3"
 )
 
+// Player plays audio on the default output device. oto allows one context per
+// process, so the device opens once and later audio is converted to its format.
 type Player struct {
+	mu           sync.Mutex
 	ctx          *oto.Context
 	sampleRate   int
 	channelCount int
-	audioFormat  oto.Format
 	format       string
 }
 
@@ -26,49 +30,74 @@ func NewPlayer(format string) *Player {
 func (p *Player) Close() {}
 
 func (p *Player) Say(b []byte) error {
+	return p.Play(context.Background(), b, p.format, nil)
+}
+
+// Play decodes b as mp3 or wav and blocks until it finishes or ctx is canceled.
+// started is called when playback begins.
+func (p *Player) Play(ctx context.Context, b []byte, format string, started func()) error {
 	if len(b) == 0 {
 		return nil
 	}
 
-	switch p.format {
+	var pcm []int16
+	var rate, chans int
+	var err error
+	switch format {
 	case "mp3":
-		return p.sayMP3(b)
+		pcm, rate, chans, err = decodeMP3(b)
 	case "wav":
-		return p.sayWAV(b)
+		pcm, rate, chans, err = decodeWAV(b)
 	default:
 		return errors.New("unsupported format")
 	}
-}
-
-// ensureContext creates or reuses an oto.Context for the given audio parameters.
-func (p *Player) ensureContext(sampleRate, channelCount int, format oto.Format) error {
-	if p.ctx != nil && p.sampleRate == sampleRate && p.channelCount == channelCount && p.audioFormat == format {
-		return nil
-	}
-	op := &oto.NewContextOptions{
-		SampleRate:   sampleRate,
-		ChannelCount: channelCount,
-		Format:       format,
-	}
-	ctx, ready, err := oto.NewContext(op)
 	if err != nil {
 		return err
+	}
+
+	octx, err := p.open(rate, chans)
+	if err != nil {
+		return err
+	}
+	pcm = Convert(pcm, rate, chans, p.sampleRate, p.channelCount)
+
+	player := octx.NewPlayer(bytes.NewReader(int16Bytes(pcm)))
+	defer player.Close()
+	player.Play()
+	if started != nil {
+		started()
+	}
+	for player.IsPlaying() {
+		select {
+		case <-ctx.Done():
+			player.Pause()
+			return ctx.Err()
+		case <-time.After(time.Millisecond):
+		}
+	}
+	return nil
+}
+
+// open creates the oto context on first use and returns it.
+func (p *Player) open(sampleRate, channelCount int) (*oto.Context, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.ctx != nil {
+		return p.ctx, nil
+	}
+	ctx, ready, err := oto.NewContext(&oto.NewContextOptions{
+		SampleRate:   sampleRate,
+		ChannelCount: channelCount,
+		Format:       oto.FormatSignedInt16LE,
+	})
+	if err != nil {
+		return nil, err
 	}
 	<-ready
 	p.ctx = ctx
 	p.sampleRate = sampleRate
 	p.channelCount = channelCount
-	p.audioFormat = format
-	return nil
-}
-
-// playPCM sends raw PCM bytes to the audio device and blocks until done.
-func (p *Player) playPCM(pcm []byte) {
-	player := p.ctx.NewPlayer(bytes.NewReader(pcm))
-	player.Play()
-	for player.IsPlaying() {
-		time.Sleep(time.Millisecond)
-	}
+	return ctx, nil
 }
 
 // Drain waits for the hardware audio buffer to finish outputting the last
@@ -78,39 +107,91 @@ func (p *Player) Drain() {
 	time.Sleep(100 * time.Millisecond)
 }
 
-func (p *Player) sayMP3(b []byte) error {
-	dec, data, err := minimp3.DecodeFull(b)
-	if err != nil {
-		return err
+// Convert resamples interleaved pcm to another rate with linear interpolation
+// and mixes or copies channels to match.
+func Convert(pcm []int16, rate, chans, toRate, toChans int) []int16 {
+	if chans < 1 || toChans < 1 || rate < 1 || toRate < 1 {
+		return pcm
 	}
-	if err := p.ensureContext(dec.SampleRate, dec.Channels, oto.FormatSignedInt16LE); err != nil {
-		return err
+	if rate == toRate && chans == toChans {
+		return pcm
 	}
-	p.playPCM(data)
-	return nil
+
+	frames := len(pcm) / chans
+	mixed := make([]float64, frames*toChans)
+	for f := 0; f < frames; f++ {
+		src := pcm[f*chans : f*chans+chans]
+		for c := 0; c < toChans; c++ {
+			if chans == toChans {
+				mixed[f*toChans+c] = float64(src[c])
+				continue
+			}
+			var sum float64
+			for _, s := range src {
+				sum += float64(s)
+			}
+			mixed[f*toChans+c] = sum / float64(chans)
+		}
+	}
+	if rate == toRate || frames == 0 {
+		return toInt16(mixed)
+	}
+
+	outFrames := int(int64(frames) * int64(toRate) / int64(rate))
+	out := make([]float64, outFrames*toChans)
+	step := float64(rate) / float64(toRate)
+	for f := 0; f < outFrames; f++ {
+		pos := float64(f) * step
+		i := int(pos)
+		frac := pos - float64(i)
+		j := min(i+1, frames-1)
+		for c := 0; c < toChans; c++ {
+			a, b := mixed[i*toChans+c], mixed[j*toChans+c]
+			out[f*toChans+c] = a + (b-a)*frac
+		}
+	}
+	return toInt16(out)
 }
 
-func (p *Player) sayWAV(b []byte) error {
+func toInt16(in []float64) []int16 {
+	out := make([]int16, len(in))
+	for i, v := range in {
+		out[i] = int16(max(-32768, min(32767, v)))
+	}
+	return out
+}
+
+func int16Bytes(pcm []int16) []byte {
+	out := make([]byte, len(pcm)*2)
+	for i, s := range pcm {
+		out[i*2] = byte(s)
+		out[i*2+1] = byte(s >> 8)
+	}
+	return out
+}
+
+func decodeMP3(b []byte) ([]int16, int, int, error) {
+	dec, data, err := minimp3.DecodeFull(b)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	pcm := make([]int16, len(data)/2)
+	for i := range pcm {
+		pcm[i] = int16(uint16(data[i*2]) | uint16(data[i*2+1])<<8)
+	}
+	return pcm, dec.SampleRate, dec.Channels, nil
+}
+
+func decodeWAV(b []byte) ([]int16, int, int, error) {
 	dec := wav.NewDecoder(bytes.NewReader(b))
 	if dec == nil {
-		return errors.New("failed to create wav decoder")
+		return nil, 0, 0, errors.New("failed to create wav decoder")
 	}
 	dec.ReadInfo()
 	if dec.SampleRate == 0 {
-		return errors.New("failed to read wav info")
+		return nil, 0, 0, errors.New("failed to read wav info")
 	}
 
-	// oto v3's FormatUnsignedInt8 has a Go byte-arithmetic bug (v8-(1<<7)
-	// wraps unsigned, producing inverted output). Always decode to signed
-	// 16-bit LE, which oto handles correctly.
-	if err := p.ensureContext(int(dec.SampleRate), int(dec.NumChans), oto.FormatSignedInt16LE); err != nil {
-		return err
-	}
-
-	srcBytesPerSample := int(dec.BitDepth) / 8
-	if srcBytesPerSample < 1 {
-		srcBytesPerSample = 1
-	}
 	pcmBuf := &audio.IntBuffer{
 		Format: &audio.Format{
 			SampleRate:  int(dec.SampleRate),
@@ -119,33 +200,29 @@ func (p *Player) sayWAV(b []byte) error {
 		Data: make([]int, 4096),
 	}
 
-	var raw []byte
+	// oto v3's FormatUnsignedInt8 has a Go byte-arithmetic bug (v8-(1<<7)
+	// wraps unsigned, producing inverted output). Always decode to signed 16-bit.
+	var pcm []int16
 	for {
 		n, err := dec.PCMBuffer(pcmBuf)
 		if n == 0 {
 			break
 		}
-		out := make([]byte, n*2) // always output signed 16-bit LE
-		for i := 0; i < n; i++ {
-			v := pcmBuf.Data[i]
-			var s16 int16
+		for _, v := range pcmBuf.Data[:n] {
 			switch dec.BitDepth {
 			case 8:
-				// go-audio/wav returns unsigned 0-255; centre at 128, scale to 16-bit
-				s16 = int16((v - 128) * 256)
+				pcm = append(pcm, int16((v-128)*256))
+			case 24:
+				pcm = append(pcm, int16(v>>8))
+			case 32:
+				pcm = append(pcm, int16(v>>16))
 			default:
-				// 16-bit (and others): already signed, keep as-is
-				s16 = int16(v)
+				pcm = append(pcm, int16(v))
 			}
-			out[i*2] = byte(s16)
-			out[i*2+1] = byte(s16 >> 8)
 		}
-		raw = append(raw, out...)
 		if err != nil {
 			break
 		}
 	}
-
-	p.playPCM(raw)
-	return nil
+	return pcm, int(dec.SampleRate), int(dec.NumChans), nil
 }
